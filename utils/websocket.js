@@ -235,7 +235,7 @@ const handleGetTabs = async (ws, sessionToken, username) => {
 };
 
 // --------------------------------------
-// ✅ Shortcuts Management
+// Shortcuts Management
 // --------------------------------------
 const handleAddShortcut = async (ws, sessionToken, username, shortcutData) => {
     try {
@@ -292,7 +292,7 @@ const handleDeleteShortcut = async (ws, sessionToken, username, shortcutId) => {
 };
 
 // --------------------------------------
-// ✅ History Management
+// History Management
 // --------------------------------------
 const handleAddHistory = async (ws, sessionToken, username, historyData) => {
     try {
@@ -337,7 +337,7 @@ const handleDeleteHistory = async (ws, sessionToken, username) => {
 };
 
 // --------------------------------------
-// ✅ Bookmark Management
+// Bookmark Management
 // --------------------------------------
 const handleAddBookmark = async (ws, sessionToken, username, bookmarkData) => {
     try {
@@ -414,7 +414,7 @@ const handleGetBookmarks = async (ws, sessionToken, username) => {
 };
 
 // --------------------------------------
-// ✅ Notes Management
+// Notes Management
 // --------------------------------------
 const handleAddNote = async (ws, sessionToken, username, noteData) => {
     try {
