@@ -1,9 +1,16 @@
 const express = require("express");
 const axios = require("axios");
 const logger = require("../utils/logger");
-const cache = require("../utils/cache");
+const {
+    cache,
+    validateSearch,
+    freshnessMap,
+    getGeoData,
+    getIP,
+} = require("../utils/utils");
+const { validationResult } = require("express-validator");
+
 const router = express.Router();
-const { query, validationResult } = require("express-validator");
 
 // 🔍 Search Suggest API
 router.get("/suggest", async (req, res) => {
@@ -29,13 +36,7 @@ router.get("/suggest", async (req, res) => {
             }
         );
 
-        if (!data.results) {
-            logger.warn(
-                `Brave Suggest API returned empty response for query: "${q}"`
-            );
-        }
-
-        const suggestions = data.results.map((item) => item.query);
+        const suggestions = data.results?.map((item) => item.query) || [];
         cache.set(cacheKey, { status: 200, suggestions });
 
         res.status(200).json({ status: 200, suggestions });
@@ -44,88 +45,14 @@ router.get("/suggest", async (req, res) => {
             status: error.response?.status,
             response: error.response?.data,
         });
-        res
-            .status(error.response?.status || 500)
-            .json({ error: "Error fetching data from Brave API" });
+        res.status(error.response?.status || 500).json({
+            error: "Error fetching data from Brave API",
+        });
     }
 });
 
-// 🌍 Get user's IP
-const getIP = async (req) => {
-    let ip = (req.headers["x-forwarded-for"] || req.socket.remoteAddress || "")
-        .split(",")[0]
-        .trim();
-    if (["::1", "127.0.0.1"].includes(ip)) {
-        try {
-            const { data } = await axios.get("https://api64.ipify.org?format=json");
-            ip = data.ip;
-        } catch (error) {
-            logger.warn("Failed to fetch external IP, using UNKNOWN.");
-            ip = "UNKNOWN";
-        }
-    }
-    return ip;
-};
-
-// 🌎 Get user country from IP
-const getGeoData = async (ip) => {
-    try {
-        const { data } = await axios.get(`http://ip-api.com/json/${ip}`);
-        return data?.countryCode || "ALL";
-    } catch (error) {
-        logger.error(`GeoData API error for IP ${ip}: ${error.message}`);
-        return "ALL";
-    }
-};
-
-// 🔄 Freshness Mapping
-const freshnessMap = {
-    day: "pd",
-    week: "pw",
-    month: "pm",
-    year: "py",
-};
-
-// ✅ Search Query Validation
-const validateSearch = [
-    query("q")
-        .trim()
-        .isLength({ min: 2 })
-        .withMessage("Query must be at least 2 characters."),
-    query("page")
-        .optional()
-        .isInt({ min: 1 })
-        .withMessage("Page must be a positive integer."),
-    query("limit")
-        .optional()
-        .isInt({ min: 1, max: 20 })
-        .withMessage("Limit must be between 1 and 20."),
-    query("safesearch")
-        .optional()
-        .isIn(["off", "moderate", "strict"])
-        .withMessage("Invalid safesearch value."),
-    query("freshness")
-        .optional()
-        .isIn(["day", "week", "month", "year"])
-        .withMessage("Invalid freshness value."),
-    query("result_filter")
-        .optional()
-        .isIn([
-            "discussions",
-            "faq",
-            "infobox",
-            "news",
-            "query",
-            "summarizer",
-            "videos",
-            "web",
-            "locations",
-        ])
-        .withMessage("Invalid result filter."),
-];
-
-// 🔍 Main Search API
-router.get("/search", validateSearch, async (req, res) => {
+// 🟢 **Search API**
+router.get("/search-online", validateSearch, async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
         logger.warn("Invalid search request", { errors: errors.array() });
@@ -138,9 +65,10 @@ router.get("/search", validateSearch, async (req, res) => {
         limit = 10,
         safesearch = "moderate",
         freshness = "py",
-        result_filter = "web",
+        type = null,
     } = req.query;
-    const offset = (page - 1) * limit;
+
+    const offset = page - 1;
     const ip = await getIP(req);
     let country = await getGeoData(ip);
 
@@ -149,30 +77,43 @@ router.get("/search", validateSearch, async (req, res) => {
         country = "IN";
     }
 
-    const cacheKey = `${q}-${page}-${limit}-${country}-${safesearch}-${freshness}-${result_filter}`;
+    const apiEndpoints = {
+        news: "https://api.search.brave.com/res/v1/news/search",
+        video: "https://api.search.brave.com/res/v1/videos/search",
+        image: "https://api.search.brave.com/res/v1/images/search",
+        web: "https://api.search.brave.com/res/v1/web/search",
+    };
+
+    const apiUrl = apiEndpoints[type] || apiEndpoints.web;
+
+    const cacheKey = `${q}-${page}-${limit}-${country}-${safesearch}-${freshness}-${type}`;
     const cachedResponse = cache.get(cacheKey);
     if (cachedResponse) return res.status(200).json(cachedResponse);
 
     try {
-        const { data } = await axios.get(
-            "https://api.search.brave.com/res/v1/web/search",
-            {
-                headers: {
-                    Accept: "application/json",
-                    "Accept-Encoding": "gzip",
-                    "X-Subscription-Token": process.env.BRAVE_API_KEY,
-                },
-                params: {
-                    q,
-                    count: limit,
-                    offset,
-                    country,
-                    safesearch,
-                    freshness: freshnessMap[freshness] || freshness,
-                    result_filter,
-                },
-            }
-        );
+        let params = {
+            q,
+            count: limit,
+            offset,
+            country,
+            safesearch,
+            freshness: freshnessMap[freshness] || freshness,
+        };
+
+        if (type === "image") {
+            delete params.freshness;
+            delete params.offset;
+            params.safesearch = "strict"
+        }
+
+        const { data } = await axios.get(apiUrl, {
+            headers: {
+                Accept: "application/json",
+                "Accept-Encoding": "gzip",
+                "X-Subscription-Token": process.env.BRAVE_API_KEY,
+            },
+            params,
+        });
 
         if (
             data.query?.country &&
@@ -181,13 +122,60 @@ router.get("/search", validateSearch, async (req, res) => {
             country = data.query.country;
         }
 
-        const items = (data.web?.results || []).map((item) => ({
-            title: item.title,
-            link: item.url,
-            description: item.description,
-            image: item.profile?.img || item.meta_url?.favicon || null,
-        }));
+        let items = [];
+        const processMetaData = (item) => ({
+            creator:
+                item.video?.creator ||
+                item.source ||
+                item.profile?.name ||
+                item.meta_url?.hostname ||
+                null,
+            image: item.thumbnail?.original || item.meta_url?.favicon || null,
+            thumbnail: item.thumbnail?.src || item.meta_url?.favicon || null,
+            creatorChannel: item.video?.author?.url || null,
+            duration: item.video?.duration || null,
+            views: item.video?.views || null,
+        });
 
+        if (type === "news") {
+            items = (data.results || []).map((item) => ({
+                type: "news",
+                title: item.title || "Untitled",
+                description: item.description || "No description available",
+                link: item.url,
+                published: item.age || "Unknown",
+                meta_data: processMetaData(item),
+            }));
+        } else if (type === "video") {
+            items = (data.results || []).map((item) => ({
+                type: "video",
+                title: item.title || "Untitled",
+                description: item.description || "No description available",
+                link: item.url,
+                published: item.age || "Unknown",
+                meta_data: processMetaData(item),
+            }));
+        } else if (type === "image") {
+            items = (data.results || []).map((item) => ({
+                type: "image",
+                title: item.title || "Untitled",
+                link: item.url,
+                description: item.description || null,
+                published: item.age || null,
+                meta_data: processMetaData(item),
+            }));
+        } else {
+            items = (data.web?.results || []).map((item) => ({
+                type: "web",
+                title: item.title || "Untitled",
+                link: item.url,
+                description: item.description || "No description available",
+                published: item.age || "Unknown",
+                meta_data: processMetaData(item),
+            }));
+        }
+
+        // 📌 **Cache & Return Result**
         const result = { page, country, items };
         cache.set(cacheKey, result);
         res.status(200).json(result);
@@ -198,12 +186,12 @@ router.get("/search", validateSearch, async (req, res) => {
             country,
             status: error.response?.status,
             message: error.message,
-            response: error.response?.data,
+            response: error.response,
         });
 
-        res
-            .status(error.response?.status || 500)
-            .json({ error: "Error fetching data from Brave API" });
+        res.status(error.response?.status || 500).json({
+            error: "Error fetching data from Brave API",
+        });
     }
 });
 
