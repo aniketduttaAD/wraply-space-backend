@@ -22,9 +22,14 @@ const sendOtpEmail = async (toEmail, subject, otp, username) => {
         .setFrom(sentFrom)
         .setTo(recipients)
         .setSubject(subject)
-        .setText(`Your OTP: ${otp}`)
-        .setHtml(`<p>Your OTP: <strong>${otp}</strong></p>`);
-
+        .setHtml(`
+            <div style="font-family: Arial, sans-serif; text-align: center;">
+                <h2>Your OTP Code</h2>
+                <p style="font-size: 18px;">Use the following OTP to complete your login:</p>
+                <p style="font-size: 24px; font-weight: bold; color: #007BFF;">${otp}</p>
+                <p>This OTP is valid for a 5 minutes.</p>
+            </div>
+        `);
     try {
         await mailerSend.email.send(emailParams);
         logger.info(`OTP sent to ${toEmail}`);
