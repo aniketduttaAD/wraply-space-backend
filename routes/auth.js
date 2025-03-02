@@ -59,14 +59,18 @@ router.post('/register', async (req, res) => {
     }
 });
 
-// Request OTP
 router.post('/request-email-otp', async (req, res) => {
     const { username } = req.body;
     try {
         const user = await User.findOne({ username });
         if (!user) return res.status(400).json({ message: 'Invalid username' });
 
-        const otp = generateOtp(user.totpSecret, Math.floor(Date.now() / 1000));
+        const currentTime = Math.floor(Date.now() / 1000);
+        const alignedTime = Math.floor(currentTime / 600) * 600;
+
+        const otp = generateOtp(user.totpSecret, alignedTime);
+
+        console.log(`Generated Email OTP: ${otp}, Aligned Timestamp: ${alignedTime}`);
         await sendOtpEmail(user.email, 'Your OTP Code', otp, user.username);
 
         logger.info(`OTP generated and sent for ${username}`);
@@ -86,9 +90,20 @@ router.post('/verify', async (req, res) => {
 
         const currentTime = Math.floor(Date.now() / 1000);
         const interval = type === 'email' ? 600 : 30;
-        const validOtps = [generateOtp(user.totpSecret, currentTime - interval), generateOtp(user.totpSecret, currentTime), generateOtp(user.totpSecret, currentTime + interval)];
+        const alignedTime = Math.floor(currentTime / interval) * interval;
 
-        if (!validOtps.includes(otp)) return res.status(400).json({ message: 'Invalid OTP, please try again' });
+        const validOtps = [
+            generateOtp(user.totpSecret, alignedTime - interval),
+            generateOtp(user.totpSecret, alignedTime),
+            generateOtp(user.totpSecret, alignedTime + interval)
+        ];
+
+        console.log(`Received OTP: ${otp}, Type: ${type}`);
+        console.log(`Generated Valid OTPs: ${validOtps}, Aligned Timestamp: ${alignedTime}`);
+
+        if (!validOtps.includes(otp)) {
+            return res.status(400).json({ message: 'Invalid OTP, please try again' });
+        }
 
         user.sessionToken = generateSessionToken(user.username);
         user.userStatus = 'verified';
